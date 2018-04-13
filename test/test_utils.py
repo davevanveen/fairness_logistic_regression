@@ -3,6 +3,7 @@ import pytest
 import pandas as pd
 from torch.autograd import Variable
 
+
 @pytest.fixture
 def binary_sample_data():
     # Load and convert data
@@ -34,10 +35,10 @@ def binary_categorical_sample_data():
     y[negative_class] = 0
 
     x = torch.from_numpy(x)
-    l = torch.ones(x.size(0)).uniform_()
+    cat = torch.ones(x.size(0)).uniform_()
     x[:, 0] = 2
-    x[:, 0][l < 0.67] = 1
-    x[:, 0][l < 0.33] = 0
+    x[:, 0][cat < 0.67] = 1
+    x[:, 0][cat < 0.33] = 0
     x = Variable(x)
     y = Variable(y)
 

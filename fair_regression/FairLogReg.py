@@ -1,9 +1,9 @@
 import torch
-from torch import nn
 from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+
 
 def to_Variables(*args, cuda=False):
     ret = []
@@ -23,10 +23,27 @@ def check_and_convert_tensor(x):
         return x.data.cpu().numpy()
 
 
+def train_val_split(x, y, val_pct):
+    nsamples = len(y)
+    nsamples_val = int(val_pct * nsamples)
+    srs = torch.utils.data.sampler.SubsetRandomSampler(range(nsamples))
+    idxs = []
+    for n, i in enumerate(srs):
+        idxs.append(i)
+        if n == nsamples_val - 1:
+            x_val = x[idxs]
+            y_val = y[idxs]
+            idxs = []
+    x = x[idxs]
+    y = y[idxs]
+
+    return x, y, x_val, y_val
+
+
 class FairLogisticRegression():
     def __init__(self, lr=0.01, n_classes=None, ftol=1e-9, tolerance_grad=1e-5,
                  fit_intercept=True, n_epochs=32, l_fair=0.0, l2=0.0, l1=0.0,
-                 minibatch_size=32, n_jobs=1):
+                 minibatch_size=32, n_jobs=1, validate=0, print_freq=0):
         self.lr = lr
         self.n_classes = n_classes
         self.ftol = ftol
@@ -35,6 +52,9 @@ class FairLogisticRegression():
         self.n_epochs = n_epochs
         self.minibatch_size = minibatch_size
         self.n_jobs = n_jobs
+        self.verbose = print_freq
+        self.validate = validate
+        assert validate < 1.0 and validate >= 0.0, "Error: self.validate must be in range [0, 1)"
 
         self.l_fair = l_fair
         self.l2 = l2
@@ -61,10 +81,19 @@ class FairLogisticRegression():
         model = torch.nn.Linear(int(self.n_features), int(self.n_classes), bias=self.fit_intercept)
         return model
 
-    def fit(self, x, y, s):
+    def fit(self, x, y, s, writer=None):
         # Make sure that s is a list for use in the code below
         if not isinstance(s, list):
             s = [s]
+
+        # Split the data if we are doing validation (i.e. self.validate > 0)
+        if self.validate:
+            x, y, x_val, y_val = train_val_split(x, y, self.validate)
+            old_loss_val = 0
+        else:
+            x_val = None
+            y_val = None
+            old_loss_val = None
 
         # Convert data into a tensor dataset so that we can easily shuffle and mini-batch
         ds = TensorDataset(x.data, y.data)
@@ -87,24 +116,64 @@ class FairLogisticRegression():
             #                              tolerance_change=self.ftol)
             self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr, weight_decay=self.l2)
 
+        old_loss = 0
         for epoch in range(self.n_epochs):
-            current_loss = 0
+            # current_loss = 0
             for i, data in enumerate(loader):
                 inputs, labels = to_Variables(*data, cuda=torch.cuda.is_available())
 
-                def closure():
-                    self.optimizer.zero_grad()
+                self.optimizer.zero_grad()
 
-                    fx = self.model.forward(inputs)
-                    output = self.loss.forward(fx, labels)
-                    if self.l1:
-                        output += self.l1_penalty()
-                    if self.l_fair:
-                        output += self.fairness_penalty(inputs, labels, x, y, s)
-                    output.backward(retain_graph=True)
-                    return output
+                fx = self.model.forward(inputs)
+                loss = self.loss.forward(fx, labels)
+                if self.l1:
+                    loss += self.l1_penalty()
+                if self.l_fair:
+                    loss += self.fairness_penalty(inputs, labels, x, y, s)
+                loss.backward(retain_graph=True)
 
-                self.optimizer.step(closure)
+                self.optimizer.step()
+                self.training_errors_.append(loss.data[0])
+                loss_delta = np.abs(old_loss - loss.data[0])
+                old_loss = loss.data[0]
+
+            if self.validate:
+                fx_val = self.model.forward(x_val)
+                loss_val = self.loss.forward(fx_val, y_val)
+                if self.l1:
+                    loss_val += self.l1_penalty()
+                if self.l_fair:
+                    loss_val += self.fairness_penalty(x_val, y_val, x_val, y_val, s)
+                self.validation_errors_.append(loss_val.data[0])
+                loss_delta_val = np.abs(old_loss_val - loss_val.data[0])
+                old_loss_val = loss_val.data[0]
+
+            # Report results in a tensorboard logger
+            if writer:
+                writer.add_scalar('training/CELoss', loss.data[0], epoch)
+                writer.add_scalar('training/Accuracy', self.score(x, y), epoch)
+                # writer.add_scalar('training/POF', self.pof(x, y), epoch)
+                if self.validate:
+                    writer.add_scalar('validation/CELoss', loss_val.data[0], epoch)
+                    writer.add_scalar('validation/Accuracy', self.score(x_val, y_val), epoch)
+                    # writer.add_scalar('validation/POF', self.pof(x_val, y_val), epoch)
+
+            if self.verbose and (epoch + 1) % self.verbose == 0:
+                # print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}   POF: {:0.5g}'
+                #       .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y), self.pof(x, y)))
+                # print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}   POF: {:0.5g}'
+                #       .format(epoch+1, self.n_epochs, loss_val.data[0],
+                #               self.score(x_val, y_val), self.pof(x_val, y_val)))
+                print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}'
+                      .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y)))
+                if self.validate:
+                    print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}'
+                          .format(loss_val.data[0], self.score(x_val, y_val)))
+            # Check stopping criteria
+            if loss_delta < self.ftol:
+                break
+            if self.validate and loss_delta_val < self.ftol:
+                break
 
         return self
 
@@ -156,7 +225,7 @@ class FairLogisticRegression():
                     cross_term = local_dot - non_local_dot ** 2
 
                     # TODO: Think through this mm call and make sure that it makes sense
-                    #       I think that it does... it's summing over all the differences for a 
+                    #       I think that it does... it's summing over all the differences for a
                     #       given local_dot cross term
                     unsummed_term = diff.t().mm(cross_term)
                     # TODO: Think about why unsummed_term will have dimensions:
@@ -169,33 +238,6 @@ class FairLogisticRegression():
                     # penalty = penalty + ((diff * cross_term).sum() / div) ** 2
 
         return self.l_fair * penalty
-
-    # # TODO: Incorporate information from s
-    # # I think that we will have to store a list of these y_diff matrices based on s
-    # def calc_y_diff_mat(self, y, s_idxs):
-    #     """Calculates the constant portion of
-    #     $\frac{1}{n_1 n_2} \sum_{(x_j, y_j) \in S_i} d(y_1, y_2) (W x_1 - W x_2)^2$ and stores
-    #     it in a list of matrices (one for each class pair)
-        
-    #     Args:
-    #         y (LongTensor): Class labels for the problem
-    #         s_idxs (list of LongTensor): List containing indices for each y that corresponds to each class label
-        
-    #     Returns:
-    #         dict of FloatTensors: Pairwise absolute differences between class labels
-    #     """
-    #     if torch.is_tensor(y):
-    #         classes = np.unique(y.cpu().numpy())
-    #     else:
-    #         classes = np.unique(y.data.cpu().numpy())
-
-    #     counts = torch.histc(y.float(), bins=len(classes), min=classes.min(), max=classes.max())
-    #     divisor = counts.prod()
-
-    #     # This should broadcast such that y_diff[i, j] = abs(y[i] - y[j]) / divisor
-    #     y_diff = torch.abs(y.view(1, -1), y.view(-1, 1)).float() / divisor
-
-    #     return y_diff
 
     def score(self, x, y):
         prediction = self.predict(x)
