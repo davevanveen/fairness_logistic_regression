@@ -3,7 +3,7 @@ from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-from cvxpy import *
+# from cvxpy import *
 
 
 def to_Variables(*args, cuda=False):
@@ -82,7 +82,7 @@ class FairLogisticRegression():
         model = torch.nn.Linear(int(self.n_features), int(self.n_classes), bias=self.fit_intercept)
         return model
 
-    def fit(self, x, y, s, writer=None): # train model
+    def fit(self, x, y, s, writer=None):  # train model
         # Make sure that s is a list for use in the code below
         if not isinstance(s, list):
             s = [s]
