@@ -30,3 +30,12 @@ def test_plain_validated_logreg(binary_sample_data):
     lr.fit(x, y, 0)
 
     print(lr.score(x, y))
+
+
+def test_fair_logreg(adult_sample_data):
+    x, y = adult_sample_data
+
+    lr = FairLogisticRegression(l_fair=0.1, validate=0.1, print_freq=4)
+    lr.fit(x, y, 29)  # 29 -> 'sex_Female'
+
+    print(lr.score(x, y))
