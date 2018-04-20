@@ -240,25 +240,13 @@ class FairLogisticRegression():
 
         return self.l_fair * penalty
 
-    def price_of_fairness(self, alpha, xi, yi, x, y, s):
-        # overall: need to get four terms: l(w), l(w*), f(w), f(w*)
-        # easy to get: l(w*), f(w*) b/c they are values. w* minimizes loss term, i.e. lambda=0
-        # must backprop through: l(w), f(w) b/c we're minimizing w.r.t. w
-
-        # Q'n: is w = optimized weights when the model is trained WITH fairness regularizer?
-
-        w_star = self.get_weights()
-
-        inputs, labels = to_Variables(*data, cuda=torch.cuda.is_available())
-        # self.optimizer.zero_grad()
-        fx = self.model.forward(inputs)
-        loss = self.loss.forward(fx, labels)
-
-        # Framework using cvxpy
-        constraint = f(w) <= alpha*f(w_star)
-        obj = Minimize(l(w) / l(w_star))
-        prob = Problem(obj, constraint)
-        pof = prob.solve()  # will pof be an attribute of the model? I don't think so
+    def price_of_fairness(self):
+        # This is a meta-optimization problem for comparing fairness penalty across data sets
+        # We just want to see how error varies with changing lmbda
+        # Save for possible extension if we choose to look at other data sets
+        lmbda = 0
+        lr_reg = FairLogisticRegression()
+        lr_fair = FairLogisticRegression(l_fair = lmbda)
 
         return pof
 
