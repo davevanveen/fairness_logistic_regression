@@ -45,3 +45,12 @@ def test_load_save_logreg(binary_sample_data):
     lr2.fit(x, y, 0)
 
     print(lr2.score(x, y))
+
+
+def test_real_data(female_adult_data):
+    s, x_train, y_train, x_test, y_test = female_adult_data
+
+    lr = FairLogisticRegression(validate=0.4, print_freq=4, l_fair=0.1)
+    lr.fit(x_train, y_train, s)
+
+    print(lr.score(x_test, y_test))

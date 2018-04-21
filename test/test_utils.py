@@ -3,6 +3,7 @@ import pytest
 import h5py
 import pandas as pd
 from torch.autograd import Variable
+from DataPreprocessing import get_adult_data
 
 
 def split_data(x, y, pct):
@@ -73,3 +74,21 @@ def adult_sample_data():
 
     x, y, _, _1 = split_data(data, target, 0.25)  # Make it smaller
     return x, y
+
+
+@pytest.fixture
+def female_adult_data():
+    s, x_train, y_train, x_test, y_test = get_adult_data(['Sex_Female'])
+
+    x_train = Variable(torch.from_numpy(x_train.as_matrix()))
+    y_train = Variable(torch.from_numpy(y_train.as_matrix()).long())
+    x_test = Variable(torch.from_numpy(x_test.as_matrix()))
+    y_test = Variable(torch.from_numpy(y_test.as_matrix()).long())
+
+    if torch.cuda.is_available():
+        x_train = x_train.cuda()
+        y_train = y_train.cuda()
+        x_test = x_test.cuda()
+        y_test = y_test.cuda()
+
+    return s, x_train, y_train, x_test, y_test

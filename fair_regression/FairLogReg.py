@@ -68,6 +68,7 @@ class FairLogisticRegression():
         self.minibatch_size = minibatch_size
         self.n_jobs = n_jobs
         self.verbose = print_freq
+        self.penalty_type = penalty_type
         self.validate = validate
         assert validate < 1.0 and validate >= 0.0, "Error: self.validate must be in range [0, 1)"
 
@@ -144,7 +145,7 @@ class FairLogisticRegression():
                 if self.l1:
                     loss += self.l1_penalty()
                 if self.l_fair:
-                    loss += self.fairness_penalty(inputs, labels, x, y, s)
+                    loss += self.fairness_penalty(inputs, labels, x, y, s, penalty_type=self.penalty_type)
                 loss.backward(retain_graph=True)
 
                 self.optimizer.step()
@@ -158,7 +159,7 @@ class FairLogisticRegression():
                 if self.l1:
                     loss_val += self.l1_penalty()
                 if self.l_fair:
-                    loss_val += self.fairness_penalty(x_val, y_val, x_val, y_val, s)
+                    loss_val += self.fairness_penalty(x_val, y_val, x_val, y_val, s, penalty_type=self.penalty_type)
                 self.validation_errors_.append(loss_val.data[0])
                 loss_delta_val = np.abs(old_loss_val - loss_val.data[0])
                 old_loss_val = loss_val.data[0]
@@ -190,6 +191,8 @@ class FairLogisticRegression():
             if self.validate and loss_delta_val < self.ftol:
                 break
 
+        # Before returning, reset self.fairness_idxs so that in future actions, you recalculate the set
+        self.fairness_idxs = None
         return self
 
     def predict(self, x):
@@ -204,6 +207,9 @@ class FairLogisticRegression():
         return self.l1 * self.get_weights().norm(p=1)
 
     # TODO: Check this more thoroughly
+    # Need a better way of keeping track of the penalties for validation etc.
+    # Currently, the fairness_idxs get calculated for training, but we don't have a way
+    # to separately indicate the validation set. As a result, the penalty is wrong for validation
     def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
         dtype = type(xi.data)
         # If this is the first time calling the penalty, save some info
@@ -225,14 +231,14 @@ class FairLogisticRegression():
         penalty = 0
         for idxs, val, div in zip(self.fairness_idxs, self.vals, self.divisors):
             # Should be size (self.minibatch_size x n_classes)
-            local_dots = torch.mm(xi, self.get_weights())
+            local_dots = torch.mm(xi, self.get_weights().t())
             for idx in idxs:
                 # Because of broadcasting rules, this should create a matrix of absolute differences
                 # of size (|S_i: class[idx]| x self.minibatch_size)
                 diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
 
                 # Size: (|S_i: class[idx]| x n_classes)
-                non_local_dot = torch.mm(x[idx], self.get_weights())
+                non_local_dot = torch.mm(x[idx], self.get_weights().t())
 
                 for local_dot in local_dots:
                     # Individual version
@@ -261,6 +267,10 @@ class FairLogisticRegression():
         # must backprop through: l(w), f(w) b/c we're minimizing w.r.t. w
 
         # Q'n: is w = optimized weights when the model is trained WITH fairness regularizer?
+
+        # Before calling fairness penalty, reset self.fairness_idxs so
+        # that you recalculate the set for the current data
+        self.fairness_idxs = None
 
         w_star = self.get_weights()
 
