@@ -56,7 +56,7 @@ def create_param_dict(fairLogReg):
 
 class FairLogisticRegression():
     def __init__(self, lr=0.01, n_classes=None, ftol=1e-9, tolerance_grad=1e-5,
-                 fit_intercept=True, n_epochs=32, l_fair=0.0, l2=0.0, l1=0.0,
+                 fit_intercept=True, n_epochs=32, l_fair=0.0, l1=0.0, l2=0.0,
                  minibatch_size=32, n_jobs=1, validate=0, print_freq=0,
                  penalty_type='individual'):
         self.lr = lr
