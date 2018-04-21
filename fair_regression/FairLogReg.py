@@ -6,12 +6,9 @@ import numpy as np
 # from cvxpy import *
 
 
-def to_Variables(*args, cuda=False):
+def to_Variables(*args):
     ret = []
     for arg in args:
-        if cuda:
-            ret.append(Variable(arg).cuda())
-        else:
             ret.append(Variable(arg))
 
     return ret
@@ -39,6 +36,21 @@ def train_val_split(x, y, val_pct):
     y = y[idxs]
 
     return x, y, x_val, y_val
+
+
+def create_param_dict(fairLogReg):
+    d = {}
+    d['lr'] = fairLogReg.lr
+    d['n_classes'] = fairLogReg.n_classes
+    d['ftol'] = fairLogReg.ftol
+    d['tolerance_grad'] = fairLogReg.tolerance_grad
+    d['n_epochs'] = fairLogReg.n_epochs
+    d['minibatch_size'] = fairLogReg.minibatch_size
+    d['n_jobs'] = fairLogReg.n_jobs
+    d['validate'] = fairLogReg.validate
+    d['print_freq'] = fairLogReg.verbose
+
+    return d
 
 
 class FairLogisticRegression():
@@ -121,7 +133,7 @@ class FairLogisticRegression():
         for epoch in range(self.n_epochs):
             # current_loss = 0
             for i, data in enumerate(loader):
-                inputs, labels = to_Variables(*data, cuda=torch.cuda.is_available())
+                inputs, labels = to_Variables(*data)
 
                 self.optimizer.zero_grad()
 
@@ -190,7 +202,7 @@ class FairLogisticRegression():
         return self.l1 * self.get_weights().norm(p=1)
 
     # TODO: Check this more thoroughly
-    def fairness_penalty(self, xi, yi, x, y, s):
+    def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
         dtype = type(xi.data)
         # If this is the first time calling the penalty, save some info
         if self.fairness_idxs is None:
@@ -223,20 +235,21 @@ class FairLogisticRegression():
                 for local_dot in local_dots:
                     # Individual version
                     # Size: |S_i: class[idx]|
-                    cross_term = local_dot - non_local_dot ** 2
+                    cross_term = (local_dot - non_local_dot) ** 2
 
-                    # TODO: Think through this mm call and make sure that it makes sense
-                    #       I think that it does... it's summing over all the differences for a
-                    #       given local_dot cross term
-                    unsummed_term = diff.t().mm(cross_term)
-                    # TODO: Think about why unsummed_term will have dimensions:
-                    #       (mini-batch x n_classes)
-                    #       The mini-batch part makes sense, but n_classes needs to go somewhere
-                    penalty = penalty + (unsummed_term).sum() / div
-
-                    # # Group version
-                    # cross_term = cross_term + (local_dot - non_local_dot)
-                    # penalty = penalty + ((diff * cross_term).sum() / div) ** 2
+                    if penalty_type == 'individual':
+                        # TODO: Think through this mm call and make sure that it makes sense
+                        #       I think that it does... it's summing over all the differences for a
+                        #       given local_dot cross term
+                        unsummed_term = diff.t().mm(cross_term)
+                        # TODO: Think about why unsummed_term will have dimensions:
+                        #       (mini-batch x n_classes)
+                        #       The mini-batch part makes sense, but n_classes needs to go somewhere
+                        penalty = penalty + (unsummed_term).sum() / div
+                    elif penalty_type == 'group':
+                        # Group version
+                        cross_term = (local_dot - non_local_dot)
+                        penalty = penalty + ((diff * cross_term).sum() / div) ** 2
 
         return self.l_fair * penalty
 
@@ -249,7 +262,7 @@ class FairLogisticRegression():
 
         w_star = self.get_weights()
 
-        inputs, labels = to_Variables(*data, cuda=torch.cuda.is_available())
+        inputs, labels = to_Variables(*data)
         # self.optimizer.zero_grad()
         fx = self.model.forward(inputs)
         loss = self.loss.forward(fx, labels)
@@ -294,3 +307,36 @@ class FairLogisticRegression():
             raise ValueError('Error: Must train model before asking for yhat')
 
         return self.predict_fn(self.model.forward(x))
+
+    def save(self, fn):
+        new_dict = self.model.state_dict().copy()
+        new_dict['validation_errors_'] = self.validation_errors_
+        new_dict['training_errors_'] = self.training_errors_
+        new_dict['parameters'] = create_param_dict(self)
+
+        torch.save(new_dict, fn)
+
+    @classmethod
+    def load(cls, fn):
+        state_dict = torch.load(fn)
+
+        # Instatiate self as the class
+        self = cls(**state_dict['parameters'])
+
+        # Get non-parameter readings out of the state dictionary
+        self.validation_errors_ = state_dict['validation_errors_']
+        self.training_errors_ = state_dict['training_errors_']
+
+        # Get rid of non parameters in a copy of the dict
+        new_dict = state_dict.copy()
+        for name in state_dict.keys():
+            if name not in ['weight', 'bias']:
+                del new_dict[name]
+
+        # Instantiate the model
+        self.n_features = state_dict['weight'].size(1)
+        self.n_classes = state_dict['weight'].size(0)
+        self.model = self.build_model().type(type(new_dict['weight']))
+        self.model.load_state_dict(new_dict)
+
+        return self
