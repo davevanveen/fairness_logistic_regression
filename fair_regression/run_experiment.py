@@ -33,7 +33,7 @@ def main(s_id, writer_name):
 
     # Instantiate and fit the model
     # TODO: Add parameterization from files somehow!
-    flr = FairLogisticRegression(l_fair=0.1, validate=0.3, print_freq=1,
+    flr = FairLogisticRegression(l_fair=0.01, validate=0.3, print_freq=1,
                                  penalty_type='individual', minibatch_size=512,
                                  batch_fairness=True)
     flr.fit(x_train, y_train, s, writer=writer)

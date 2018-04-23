@@ -335,8 +335,7 @@ class FairLogisticRegression():
                 y_soft_pred_col = y_soft_pred[idx][:, val].contiguous()
                 pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
 
-                div = idx.numel * len(yi == val)
-                import pdb; pdb.set_trace()
+                div = idx.numel() * len((yi == val).nonzero())
                 if penalty_type == 'individual':
                     # Individual version
                     pred_diff = pred_diff ** 2
