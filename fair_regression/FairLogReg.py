@@ -3,6 +3,7 @@ from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+from timeit import default_timer as timer
 # from cvxpy import *
 
 
@@ -84,9 +85,6 @@ class FairLogisticRegression():
         self.n_features = None
         self.n_samples = None
         # self.y_diff = None
-        self.fairness_idxs = None
-        self.vals = None
-        self.divisors = None
 
         self.training_errors_ = []
         self.validation_errors_ = []
@@ -115,6 +113,10 @@ class FairLogisticRegression():
         ds = TensorDataset(x.data, y.data)
         loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=True, num_workers=self.n_jobs)
 
+        # Create a placeholder variable for saved index information
+        train_idx_info = None
+        val_idx_info = None
+
         if self.n_samples is None or self.n_features is None:
             self.n_samples, self.n_features = x.size()
 
@@ -135,6 +137,7 @@ class FairLogisticRegression():
         old_loss = 0
         for epoch in range(self.n_epochs):
             # current_loss = 0
+            train_idx_info = None
             for i, data in enumerate(loader):
                 inputs, labels = to_Variables(*data)
 
@@ -143,9 +146,12 @@ class FairLogisticRegression():
                 fx = self.model.forward(inputs)
                 loss = self.loss.forward(fx, labels)
                 if self.l1:
-                    loss += self.l1_penalty()
+                    loss += self.l1 * self.l1_penalty()
                 if self.l_fair:
-                    loss += self.fairness_penalty(inputs, labels, x, y, s, penalty_type=self.penalty_type)
+                    fp, train_idx_info = self.fairness_penalty2(inputs, labels, x, y, s,
+                                                                penalty_type=self.penalty_type,
+                                                                saved_idx_info=train_idx_info)
+                    loss += self.l_fair * fp
                 loss.backward(retain_graph=True)
 
                 self.optimizer.step()
@@ -156,10 +162,14 @@ class FairLogisticRegression():
             if self.validate:
                 fx_val = self.model.forward(x_val)
                 loss_val = self.loss.forward(fx_val, y_val)
+
                 if self.l1:
-                    loss_val += self.l1_penalty()
+                    loss_val += self.l1 * self.l1_penalty()
                 if self.l_fair:
-                    loss_val += self.fairness_penalty(x_val, y_val, x_val, y_val, s, penalty_type=self.penalty_type)
+                    fp_val, val_idx_info = self.fairness_penalty2(x_val, y_val, x_val, y_val, s,
+                                                                  penalty_type=self.penalty_type,
+                                                                  saved_idx_info=val_idx_info)
+                    loss_val += self.l_fair * fp_val
                 self.validation_errors_.append(loss_val.data[0])
                 loss_delta_val = np.abs(old_loss_val - loss_val.data[0])
                 old_loss_val = loss_val.data[0]
@@ -168,31 +178,27 @@ class FairLogisticRegression():
             if writer:
                 writer.add_scalar('training/CELoss', loss.data[0], epoch)
                 writer.add_scalar('training/Accuracy', self.score(x, y), epoch)
-                # writer.add_scalar('training/POF', self.pof(x, y), epoch)
+                if self.l_fair:
+                    writer.add_scalar('training/fairness_penalty', fp, epoch)
                 if self.validate:
                     writer.add_scalar('validation/CELoss', loss_val.data[0], epoch)
                     writer.add_scalar('validation/Accuracy', self.score(x_val, y_val), epoch)
-                    # writer.add_scalar('validation/POF', self.pof(x_val, y_val), epoch)
+                    if self.l_fair:
+                        writer.add_scalar('validation/fairness_penalty', fp_val, epoch)
 
             if self.verbose and (epoch + 1) % self.verbose == 0:
-                # print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}   POF: {:0.5g}'
-                #       .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y), self.pof(x, y)))
-                # print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}   POF: {:0.5g}'
-                #       .format(epoch+1, self.n_epochs, loss_val.data[0],
-                #               self.score(x_val, y_val), self.pof(x_val, y_val)))
                 print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}'
                       .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y)))
                 if self.validate:
                     print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}'
                           .format(loss_val.data[0], self.score(x_val, y_val)))
+
             # Check stopping criteria
             if loss_delta < self.ftol:
                 break
             if self.validate and loss_delta_val < self.ftol:
                 break
 
-        # Before returning, reset self.fairness_idxs so that in future actions, you recalculate the set
-        self.fairness_idxs = None
         return self
 
     def predict(self, x):
@@ -204,32 +210,30 @@ class FairLogisticRegression():
         return prediction
 
     def l1_penalty(self):
-        return self.l1 * self.get_weights().norm(p=1)
+        return self.get_weights().norm(p=1)
 
     # TODO: Check this more thoroughly
-    # Need a better way of keeping track of the penalties for validation etc.
-    # Currently, the fairness_idxs get calculated for training, but we don't have a way
-    # to separately indicate the validation set. As a result, the penalty is wrong for validation
-    def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
+    def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual', saved_idx_info=None):
         dtype = type(xi.data)
         # If this is the first time calling the penalty, save some info
-        if self.fairness_idxs is None:
-            self.fairness_idxs = []
-            self.vals = []
-            self.divisors = []
+        if saved_idx_info is None:
+            fairness_idxs = []
+            vals = []
+            divisors = []
             for col in s:
-                self.vals.append(np.unique(check_and_convert_tensor(x)[:, col]))
-                self.fairness_idxs.append([])
+                vals.append(np.unique(check_and_convert_tensor(x)[:, col]))
+                fairness_idxs.append([])
                 prod = 1
-                for val in self.vals[-1]:
+                for val in vals[-1]:
                     idxs = (x[:, col] == float(val)).nonzero().squeeze()
                     prod *= len(idxs)
-                    self.fairness_idxs[-1].append(idxs)
-                self.divisors.append(prod)
+                    fairness_idxs[-1].append(idxs)
+                divisors.append(float(prod))
+            saved_idx_info = list(zip(fairness_idxs, vals, divisors))
 
         # Actually calculate the penalty
         penalty = 0
-        for idxs, val, div in zip(self.fairness_idxs, self.vals, self.divisors):
+        for idxs, val, div in saved_idx_info:
             # Should be size (self.minibatch_size x n_classes)
             local_dots = torch.mm(xi, self.get_weights().t())
             for idx in idxs:
@@ -259,7 +263,7 @@ class FairLogisticRegression():
                         cross_term = (local_dot - non_local_dot)
                         penalty = penalty + ((diff * cross_term).sum() / div) ** 2
 
-        return self.l_fair * penalty
+        return penalty, saved_idx_info
 
     def price_of_fairness(self, alpha, xi, yi, x, y, s):
         # overall: need to get four terms: l(w), l(w*), f(w), f(w*)
@@ -267,10 +271,6 @@ class FairLogisticRegression():
         # must backprop through: l(w), f(w) b/c we're minimizing w.r.t. w
 
         # Q'n: is w = optimized weights when the model is trained WITH fairness regularizer?
-
-        # Before calling fairness penalty, reset self.fairness_idxs so
-        # that you recalculate the set for the current data
-        self.fairness_idxs = None
 
         w_star = self.get_weights()
 
@@ -352,3 +352,51 @@ class FairLogisticRegression():
         self.model.load_state_dict(new_dict)
 
         return self
+
+    def fairness_penalty2(self, xi, yi, x, y, s, penalty_type='individual', saved_idx_info=None):
+        dtype = type(xi.data)
+        # If this is the first time calling the penalty, save some info
+        if saved_idx_info is None:
+            fairness_idxs = []
+            vals = []
+            divisors = []
+            for col in s:
+                vals.append(np.unique(check_and_convert_tensor(x)[:, col]))
+                fairness_idxs.append([])
+                prod = 1
+                for val in vals[-1]:
+                    idxs = (x[:, col] == float(val)).nonzero().squeeze()
+                    prod *= len(idxs)
+                    fairness_idxs[-1].append(idxs)
+                divisors.append(float(prod))
+            saved_idx_info = list(zip(fairness_idxs, vals, divisors))
+
+        # We're going to be indexing into the prediction in the loops below
+        y_soft_pred = self.model.forward(x)
+        yi_soft_pred = self.model.forward(xi)
+
+        # Actually calculate the penalty
+        penalty = 0
+        for idxs, val, div in saved_idx_info:
+            for idx in idxs:
+                # Because of broadcasting rules, this should create a matrix of absolute differences
+                # of size (|S_i: class[idx]| x self.minibatch_size)
+                y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+
+                # For multinomial models, sum over each possible output class separately
+                for class_idx in range(y_soft_pred.size(1)):
+                    yi_soft_pred_col = yi_soft_pred[:, class_idx].contiguous()
+                    y_soft_pred_col = y_soft_pred[idx][:, class_idx].contiguous()
+                    pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
+
+                    if penalty_type == 'individual':
+                        # Individual version
+                        pred_diff = pred_diff ** 2
+                        unsummed_term = y_diff * pred_diff
+                        penalty = penalty + (unsummed_term).sum() / div
+                    elif penalty_type == 'group':
+                        # Group version
+                        unsummed_term = y_diff * pred_diff
+                        penalty = penalty + (unsummed_term.sum() / div) ** 2
+
+        return penalty, saved_idx_info

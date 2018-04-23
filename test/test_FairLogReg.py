@@ -48,9 +48,16 @@ def test_load_save_logreg(binary_sample_data):
 
 
 def test_real_data(female_adult_data):
-    s, x_train, y_train, x_test, y_test = female_adult_data
+    s, x_train, y_train, _, _1 = female_adult_data
+    # This data is huge, so just take a small part to test
+    _, _1, x_train, y_train = split_data(x_train, y_train, 0.1)
+    x_train, y_train, x_test, y_test = split_data(x_train, y_train, 0.3)
 
-    lr = FairLogisticRegression(validate=0.4, print_freq=4, l_fair=0.1)
+    lr = FairLogisticRegression(validate=0.4, print_freq=4, l_fair=1000)
     lr.fit(x_train, y_train, s)
 
-    print(lr.score(x_test, y_test))
+    pure_lr = FairLogisticRegression(validate=0.4, print_freq=4, l_fair=0.0)
+    pure_lr.fit(x_train, y_train, s)
+
+    print('With fairness: {}'.format(lr.score(x_test, y_test)))
+    print('Without fairness: {}'.format(pure_lr.score(x_test, y_test)))

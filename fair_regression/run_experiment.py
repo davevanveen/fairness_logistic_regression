@@ -4,9 +4,12 @@ from torch.autograd import Variable
 from DataPreprocessing import get_adult_data
 from FairLogReg import FairLogisticRegression
 from sklearn.metrics import mean_squared_error
+from tensorboardX import SummaryWriter
 
 
-def main(s_id):
+def main(s_id, writer_name):
+    writer = SummaryWriter(log_dir=writer_name, comment=writer_name)
+
     # Import data as pandas dataframes
     s, x_train, y_train, x_test, y_test = get_adult_data(s_id)
 
@@ -29,8 +32,8 @@ def main(s_id):
 
     # Instantiate and fit the model
     # TODO: Add parameterization from files somehow!
-    flr = FairLogisticRegression(l_fair=0.1, validate=0.2, print_freq=4, penalty_type='individual')
-    flr.fit(x_train, y_train, s)
+    flr = FairLogisticRegression(l_fair=0.1, validate=0.02, print_freq=1, penalty_type='individual')
+    flr.fit(x_train, y_train, s, writer=writer)
 
     # Predict x_test, but then convert result to numpy array
     y_pred = flr.predict(x_test).data.cpu().numpy()
@@ -40,7 +43,7 @@ def main(s_id):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('Usage: python {} s_id'.format(sys.argv[0]))
+    if len(sys.argv) < 3:
+        print('Usage: python {} [s_id...] writer_name'.format(sys.argv[0]))
 
-    main(sys.argv[1:])
+    main(sys.argv[1:-1], sys.argv[-1])
