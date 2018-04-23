@@ -5,6 +5,7 @@ from DataPreprocessing import get_adult_data
 from FairLogReg import FairLogisticRegression
 from sklearn.metrics import mean_squared_error
 from tensorboardX import SummaryWriter
+CUDA_VISIBLE_DEVICES=2  # noqa
 
 
 def main(s_id, writer_name):
@@ -32,7 +33,9 @@ def main(s_id, writer_name):
 
     # Instantiate and fit the model
     # TODO: Add parameterization from files somehow!
-    flr = FairLogisticRegression(l_fair=0.1, validate=0.02, print_freq=1, penalty_type='individual')
+    flr = FairLogisticRegression(l_fair=0.1, validate=0.3, print_freq=1,
+                                 penalty_type='individual', minibatch_size=512,
+                                 batch_fairness=True)
     flr.fit(x_train, y_train, s, writer=writer)
 
     # Predict x_test, but then convert result to numpy array
@@ -45,5 +48,6 @@ def main(s_id, writer_name):
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         print('Usage: python {} [s_id...] writer_name'.format(sys.argv[0]))
+        sys.exit(0)
 
     main(sys.argv[1:-1], sys.argv[-1])

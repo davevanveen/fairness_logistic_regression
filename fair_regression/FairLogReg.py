@@ -4,12 +4,16 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from timeit import default_timer as timer
+CUDA_VISIBLE_DEVICES=2  # noqa
 # from cvxpy import *
 
 
 def to_Variables(*args):
     ret = []
     for arg in args:
+        if torch.cuda.is_available():
+            ret.append(Variable(arg).cuda())
+        else:
             ret.append(Variable(arg))
 
     return ret
@@ -51,6 +55,7 @@ def create_param_dict(fairLogReg):
     d['validate'] = fairLogReg.validate
     d['print_freq'] = fairLogReg.verbose
     d['penalty_type'] = fairLogReg.penalty_type
+    d['batch_fairness'] = fairLogReg.mb_fairness
 
     return d
 
@@ -59,7 +64,7 @@ class FairLogisticRegression():
     def __init__(self, lr=0.01, n_classes=None, ftol=1e-9, tolerance_grad=1e-5,
                  fit_intercept=True, n_epochs=32, l_fair=0.0, l1=0.0, l2=0.0,
                  minibatch_size=32, n_jobs=1, validate=0, print_freq=0,
-                 penalty_type='individual'):
+                 penalty_type='individual', batch_fairness=False):
         self.lr = lr
         self.n_classes = n_classes
         self.ftol = ftol
@@ -70,6 +75,7 @@ class FairLogisticRegression():
         self.n_jobs = n_jobs
         self.verbose = print_freq
         self.penalty_type = penalty_type
+        self.mb_fairness = batch_fairness
         self.validate = validate
         assert validate < 1.0 and validate >= 0.0, "Error: self.validate must be in range [0, 1)"
 
@@ -110,12 +116,15 @@ class FairLogisticRegression():
             old_loss_val = None
 
         # Convert data into a tensor dataset so that we can easily shuffle and mini-batch
-        ds = TensorDataset(x.data, y.data)
-        loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=True, num_workers=self.n_jobs)
+        ds = TensorDataset(x.data.cpu(), y.data.cpu())
+        loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=False, num_workers=self.n_jobs)
+        # loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=True, num_workers=self.n_jobs)
 
         # Create a placeholder variable for saved index information
         train_idx_info = None
         val_idx_info = None
+        fp = Variable(torch.FloatTensor(0))
+        fp_val = Variable(torch.FloatTensor(0))
 
         if self.n_samples is None or self.n_features is None:
             self.n_samples, self.n_features = x.size()
@@ -148,9 +157,14 @@ class FairLogisticRegression():
                 if self.l1:
                     loss += self.l1 * self.l1_penalty()
                 if self.l_fair:
-                    fp, train_idx_info = self.fairness_penalty2(inputs, labels, x, y, s,
-                                                                penalty_type=self.penalty_type,
-                                                                saved_idx_info=train_idx_info)
+                    if self.mb_fairness:
+                        fp, _ = self.fairness_penalty2(inputs, labels, inputs, labels, s,
+                                                       penalty_type=self.penalty_type,
+                                                       saved_idx_info=None)
+                    else:
+                        fp, train_idx_info = self.fairness_penalty2(inputs, labels, x, y, s,
+                                                                    penalty_type=self.penalty_type,
+                                                                    saved_idx_info=train_idx_info)
                     loss += self.l_fair * fp
                 loss.backward(retain_graph=True)
 
@@ -187,11 +201,11 @@ class FairLogisticRegression():
                         writer.add_scalar('validation/fairness_penalty', fp_val, epoch)
 
             if self.verbose and (epoch + 1) % self.verbose == 0:
-                print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}'
-                      .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y)))
+                print('Epoch [{}/{}] Training    CE Loss: {:0.5g}   Accuracy: {:0.5g}   Penalty: {:0.5g}'
+                      .format(epoch+1, self.n_epochs, loss.data[0], self.score(x, y), fp.data[0]))
                 if self.validate:
-                    print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}'
-                          .format(loss_val.data[0], self.score(x_val, y_val)))
+                    print('              Validation  CE Loss: {:0.5g}   Accuracy: {:0.5g}   Penalty: {:0.5g}'
+                          .format(loss_val.data[0], self.score(x_val, y_val), fp_val.data[0]))
 
             # Check stopping criteria
             if loss_delta < self.ftol:
@@ -357,19 +371,15 @@ class FairLogisticRegression():
         dtype = type(xi.data)
         # If this is the first time calling the penalty, save some info
         if saved_idx_info is None:
-            fairness_idxs = []
-            vals = []
-            divisors = []
+            saved_idx_info = []
             for col in s:
-                vals.append(np.unique(check_and_convert_tensor(x)[:, col]))
-                fairness_idxs.append([])
-                prod = 1
-                for val in vals[-1]:
+                vals = np.unique(check_and_convert_tensor(x)[:, col])
+                fairness_idxs = []
+                for val in vals:
                     idxs = (x[:, col] == float(val)).nonzero().squeeze()
-                    prod *= len(idxs)
-                    fairness_idxs[-1].append(idxs)
-                divisors.append(float(prod))
-            saved_idx_info = list(zip(fairness_idxs, vals, divisors))
+                    fairness_idxs.append(idxs)
+                current_info = list(zip(fairness_idxs, vals))
+                saved_idx_info.append(current_info)
 
         # We're going to be indexing into the prediction in the loops below
         y_soft_pred = self.model.forward(x)
@@ -377,26 +387,25 @@ class FairLogisticRegression():
 
         # Actually calculate the penalty
         penalty = 0
-        for idxs, val, div in saved_idx_info:
-            for idx in idxs:
+        for i, s_id in enumerate(s):
+            for idx, val in saved_idx_info[i]:
                 # Because of broadcasting rules, this should create a matrix of absolute differences
                 # of size (|S_i: class[idx]| x self.minibatch_size)
                 y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
 
-                # For multinomial models, sum over each possible output class separately
-                for class_idx in range(y_soft_pred.size(1)):
-                    yi_soft_pred_col = yi_soft_pred[:, class_idx].contiguous()
-                    y_soft_pred_col = y_soft_pred[idx][:, class_idx].contiguous()
-                    pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
+                # For multinomial models, sum over the relevant input class (contained in val)
+                yi_soft_pred_col = yi_soft_pred[:, val].contiguous()
+                y_soft_pred_col = y_soft_pred[idx][:, val].contiguous()
+                pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
 
-                    if penalty_type == 'individual':
-                        # Individual version
-                        pred_diff = pred_diff ** 2
-                        unsummed_term = y_diff * pred_diff
-                        penalty = penalty + (unsummed_term).sum() / div
-                    elif penalty_type == 'group':
-                        # Group version
-                        unsummed_term = y_diff * pred_diff
-                        penalty = penalty + (unsummed_term.sum() / div) ** 2
+                if penalty_type == 'individual':
+                    # Individual version
+                    pred_diff = pred_diff ** 2
+                    unsummed_term = y_diff * pred_diff
+                    penalty = penalty + (unsummed_term).sum() / div
+                elif penalty_type == 'group':
+                    # Group version
+                    unsummed_term = y_diff * pred_diff
+                    penalty = penalty + (unsummed_term.sum() / div) ** 2
 
         return penalty, saved_idx_info
