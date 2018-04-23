@@ -120,9 +120,7 @@ class FairLogisticRegression():
         loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=False, num_workers=self.n_jobs)
         # loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=True, num_workers=self.n_jobs)
 
-        # Create a placeholder variable for saved index information
-        train_idx_info = None
-        val_idx_info = None
+        # Create placeholder variables in case we aren't using fairness (don't mess with reporting of results)
         fp = Variable(torch.FloatTensor(0))
         fp_val = Variable(torch.FloatTensor(0))
 
@@ -146,7 +144,6 @@ class FairLogisticRegression():
         old_loss = 0
         for epoch in range(self.n_epochs):
             # current_loss = 0
-            train_idx_info = None
             for i, data in enumerate(loader):
                 inputs, labels = to_Variables(*data)
 
@@ -158,13 +155,9 @@ class FairLogisticRegression():
                     loss += self.l1 * self.l1_penalty()
                 if self.l_fair:
                     if self.mb_fairness:
-                        fp, _ = self.fairness_penalty2(inputs, labels, inputs, labels, s,
-                                                       penalty_type=self.penalty_type,
-                                                       saved_idx_info=None)
+                        fp = self.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type=self.penalty_type)
                     else:
-                        fp, train_idx_info = self.fairness_penalty2(inputs, labels, x, y, s,
-                                                                    penalty_type=self.penalty_type,
-                                                                    saved_idx_info=train_idx_info)
+                        fp = self.fairness_penalty(inputs, labels, x, y, s, penalty_type=self.penalty_type)
                     loss += self.l_fair * fp
                 loss.backward(retain_graph=True)
 
@@ -180,9 +173,7 @@ class FairLogisticRegression():
                 if self.l1:
                     loss_val += self.l1 * self.l1_penalty()
                 if self.l_fair:
-                    fp_val, val_idx_info = self.fairness_penalty2(x_val, y_val, x_val, y_val, s,
-                                                                  penalty_type=self.penalty_type,
-                                                                  saved_idx_info=val_idx_info)
+                    fp_val = self.fairness_penalty(x_val, y_val, x_val, y_val, s, penalty_type=self.penalty_type)
                     loss_val += self.l_fair * fp_val
                 self.validation_errors_.append(loss_val.data[0])
                 loss_delta_val = np.abs(old_loss_val - loss_val.data[0])
@@ -225,59 +216,6 @@ class FairLogisticRegression():
 
     def l1_penalty(self):
         return self.get_weights().norm(p=1)
-
-    # TODO: Check this more thoroughly
-    def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual', saved_idx_info=None):
-        dtype = type(xi.data)
-        # If this is the first time calling the penalty, save some info
-        if saved_idx_info is None:
-            fairness_idxs = []
-            vals = []
-            divisors = []
-            for col in s:
-                vals.append(np.unique(check_and_convert_tensor(x)[:, col]))
-                fairness_idxs.append([])
-                prod = 1
-                for val in vals[-1]:
-                    idxs = (x[:, col] == float(val)).nonzero().squeeze()
-                    prod *= len(idxs)
-                    fairness_idxs[-1].append(idxs)
-                divisors.append(float(prod))
-            saved_idx_info = list(zip(fairness_idxs, vals, divisors))
-
-        # Actually calculate the penalty
-        penalty = 0
-        for idxs, val, div in saved_idx_info:
-            # Should be size (self.minibatch_size x n_classes)
-            local_dots = torch.mm(xi, self.get_weights().t())
-            for idx in idxs:
-                # Because of broadcasting rules, this should create a matrix of absolute differences
-                # of size (|S_i: class[idx]| x self.minibatch_size)
-                diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
-
-                # Size: (|S_i: class[idx]| x n_classes)
-                non_local_dot = torch.mm(x[idx], self.get_weights().t())
-
-                for local_dot in local_dots:
-                    # Individual version
-                    # Size: |S_i: class[idx]|
-                    cross_term = (local_dot - non_local_dot) ** 2
-
-                    if penalty_type == 'individual':
-                        # TODO: Think through this mm call and make sure that it makes sense
-                        #       I think that it does... it's summing over all the differences for a
-                        #       given local_dot cross term
-                        unsummed_term = diff.t().mm(cross_term)
-                        # TODO: Think about why unsummed_term will have dimensions:
-                        #       (mini-batch x n_classes)
-                        #       The mini-batch part makes sense, but n_classes needs to go somewhere
-                        penalty = penalty + (unsummed_term).sum() / div
-                    elif penalty_type == 'group':
-                        # Group version
-                        cross_term = (local_dot - non_local_dot)
-                        penalty = penalty + ((diff * cross_term).sum() / div) ** 2
-
-        return penalty, saved_idx_info
 
     def price_of_fairness(self, alpha, xi, yi, x, y, s):
         # overall: need to get four terms: l(w), l(w*), f(w), f(w*)
@@ -367,19 +305,18 @@ class FairLogisticRegression():
 
         return self
 
-    def fairness_penalty2(self, xi, yi, x, y, s, penalty_type='individual', saved_idx_info=None):
+    def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
         dtype = type(xi.data)
-        # If this is the first time calling the penalty, save some info
-        if saved_idx_info is None:
-            saved_idx_info = []
-            for col in s:
-                vals = np.unique(check_and_convert_tensor(x)[:, col])
-                fairness_idxs = []
-                for val in vals:
-                    idxs = (x[:, col] == float(val)).nonzero().squeeze()
-                    fairness_idxs.append(idxs)
-                current_info = list(zip(fairness_idxs, vals))
-                saved_idx_info.append(current_info)
+
+        saved_idx_info = []
+        for col in s:
+            vals = np.unique(check_and_convert_tensor(x)[:, col])
+            fairness_idxs = []
+            for val in vals:
+                idxs = (x[:, col] == float(val)).nonzero().squeeze()
+                fairness_idxs.append(idxs)
+            current_info = list(zip(fairness_idxs, vals))
+            saved_idx_info.append(current_info)
 
         # We're going to be indexing into the prediction in the loops below
         y_soft_pred = self.model.forward(x)
@@ -398,6 +335,8 @@ class FairLogisticRegression():
                 y_soft_pred_col = y_soft_pred[idx][:, val].contiguous()
                 pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
 
+                div = idx.numel * len(yi == val)
+                import pdb; pdb.set_trace()
                 if penalty_type == 'individual':
                     # Individual version
                     pred_diff = pred_diff ** 2
@@ -408,4 +347,4 @@ class FairLogisticRegression():
                     unsummed_term = y_diff * pred_diff
                     penalty = penalty + (unsummed_term.sum() / div) ** 2
 
-        return penalty, saved_idx_info
+        return penalty
