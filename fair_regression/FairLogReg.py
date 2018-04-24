@@ -61,7 +61,7 @@ def create_param_dict(fairLogReg):
 
 
 class FairLogisticRegression():
-    def __init__(self, lr=0.01, n_classes=None, ftol=1e-9, tolerance_grad=1e-5,
+    def __init__(self, lr=0.01, n_classes=None, ftol=1e-6, tolerance_grad=1e-5,
                  fit_intercept=True, n_epochs=32, l_fair=0.0, l1=0.0, l2=0.0,
                  minibatch_size=32, n_jobs=1, validate=0, print_freq=0,
                  penalty_type='individual', batch_fairness=False):
@@ -213,6 +213,14 @@ class FairLogisticRegression():
         output = self.predict_fn(self.model.forward(x))
         prediction = torch.max(output, 1)[1]
         return prediction
+
+    def predict_proba(self, x):
+        if self.model is None:
+            raise ValueError('Error: Must train model before trying to predict any value')
+
+        fx = self.model.forward(x)
+        probas = torch.nn.Softmax(dim=1)(fx)
+        return probas
 
     def l1_penalty(self):
         return self.get_weights().norm(p=1)

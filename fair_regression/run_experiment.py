@@ -1,4 +1,5 @@
 import sys
+import json
 import torch
 from torch.autograd import Variable
 from DataPreprocessing import get_adult_data
@@ -8,7 +9,17 @@ from tensorboardX import SummaryWriter
 CUDA_VISIBLE_DEVICES=2  # noqa
 
 
-def main(s_id, writer_name):
+def read_json_params(fn):
+    fair_logreg_keys = ['lr', 'n_classes', 'ftol', 'tolerance_grad',
+                        'fit_intercept', 'n_epochs', 'l_fair', 'l1', 'l2',
+                        'minibatch_size', 'n_jobs', 'validate', 'print_freq',
+                        'penalty_type', 'batch_fairness']
+
+    with open(fn, 'r') as f:
+        d = json.load(f)
+
+
+def run_fairness_regression(s_id, writer_name, **kwargs):
     writer = SummaryWriter(log_dir=writer_name, comment=writer_name)
 
     # Import data as pandas dataframes
@@ -32,10 +43,7 @@ def main(s_id, writer_name):
     y_test = y_test.as_matrix()
 
     # Instantiate and fit the model
-    # TODO: Add parameterization from files somehow!
-    flr = FairLogisticRegression(l_fair=0.01, validate=0.3, print_freq=1,
-                                 penalty_type='individual', minibatch_size=512,
-                                 batch_fairness=True)
+    flr = FairLogisticRegression(**kwargs)
     flr.fit(x_train, y_train, s, writer=writer)
 
     # Predict x_test, but then convert result to numpy array
@@ -50,4 +58,4 @@ if __name__ == '__main__':
         print('Usage: python {} [s_id...] writer_name'.format(sys.argv[0]))
         sys.exit(0)
 
-    main(sys.argv[1:-1], sys.argv[-1])
+    run_fairness_regression(sys.argv[1:-1], sys.argv[-1])
