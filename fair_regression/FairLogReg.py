@@ -337,21 +337,22 @@ class FairLogisticRegression():
                 # Because of broadcasting rules, this should create a matrix of absolute differences
                 # of size (|S_i: class[idx]| x self.minibatch_size)
                 y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
-
-                # For multinomial models, sum over the relevant input class (contained in val)
-                yi_soft_pred_col = yi_soft_pred[:, val].contiguous()
-                y_soft_pred_col = y_soft_pred[idx][:, val].contiguous()
-                pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
-
                 div = idx.numel() * len((yi == val).nonzero())
-                if penalty_type == 'individual':
-                    # Individual version
-                    pred_diff = pred_diff ** 2
-                    unsummed_term = y_diff * pred_diff
-                    penalty = penalty + (unsummed_term).sum() / div
-                elif penalty_type == 'group':
-                    # Group version
-                    unsummed_term = y_diff * pred_diff
-                    penalty = penalty + (unsummed_term.sum() / div) ** 2
+
+                # For multinomial models, sum over each class
+                for col in range(y_soft_pred.size(1)):
+                    yi_soft_pred_col = yi_soft_pred[:, col].contiguous()
+                    y_soft_pred_col = y_soft_pred[idx][:, col].contiguous()
+                    pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
+
+                    if penalty_type == 'individual':
+                        # Individual version
+                        pred_diff = pred_diff ** 2
+                        unsummed_term = y_diff * pred_diff
+                        penalty = penalty + (unsummed_term).sum() / div
+                    elif penalty_type == 'group':
+                        # Group version
+                        unsummed_term = y_diff * pred_diff
+                        penalty = penalty + (unsummed_term.sum() / div) ** 2
 
         return penalty
