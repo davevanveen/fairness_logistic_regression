@@ -3,7 +3,7 @@ from torch import optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-from timeit import default_timer as timer
+# from timeit import default_timer as timer
 CUDA_VISIBLE_DEVICES=2  # noqa
 # from cvxpy import *
 

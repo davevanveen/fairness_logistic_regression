@@ -89,6 +89,9 @@ for train, test in cv.split(x, y):
         current_df_dict['l_fair'] = penalty
 
         # Save string for identifying models
+        plain_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'plain')
+        indiv_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'indiv')
+        group_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'group')
         current_df_dict['ID_String'].extend([plain_str, indiv_str, group_str])
 
         # Save score info
@@ -144,11 +147,6 @@ for train, test in cv.split(x, y):
         df = pd.concat([df, pd.DataFrame.from_dict(current_df_dict)])
 
         df.to_csv('save_temporary_results.csv')
-
-        # Save the models
-        plain_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'plain')
-        indiv_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'indiv')
-        group_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'group')
 
         plain.model = plain.model.cpu()
         indiv.model = indiv.model.cpu()

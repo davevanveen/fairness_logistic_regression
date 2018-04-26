@@ -30,7 +30,7 @@ new_df = pd.DataFrame()
 for t in model_types:
     for p in penalties:
         unique_id = model_str.format(p, t)
-        my_model = model_dict[unique_id]
+        my_model = model_dict[unique_id].cuda()
 
         pred = my_model.predict(torch_xt).data.cpu().numpy()
         x_test[unique_id] = pred
