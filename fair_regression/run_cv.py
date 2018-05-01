@@ -58,103 +58,77 @@ fold = 0
 df = pd.DataFrame()
 
 for train, test in cv.split(x, y):
+    # Convert all of the arrays into PyTorch Arrays
     train = torch.from_numpy(train).long()
     test = torch.from_numpy(test).long()
     if torch.cuda.is_available():
         train = train.cuda()
         test = test.cuda()
+
+    # Make the arrays contiguous for more spatial locality
     x_train = x[train].contiguous()
     x_test = x[test].contiguous()
     y_train = y[train].contiguous()
     y_test = y[test].contiguous()
+
+    ds = TensorDataset(x_test.data.cpu(), y_test.data.cpu())
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=1)
 
     fold += 1
     print("Fold: {}/3".format(fold))
     for penalty in penalties:
         print("  Penalty: {:0.5g}".format(penalty))
         current_df_dict = copy.deepcopy(df_template)
+        current_df_dict['l_fair'] = penalty  # Save the penalty weight
         penalty = float(penalty)  # PyTorch messes up with numpy types
 
-        # Define models
-        plain = FairLogisticRegression(n_epochs=n_epochs, ftol=1e-6, minibatch_size=32)
-        indiv = FairLogisticRegression(l_fair=penalty, penalty_type='individual', **shared_kwargs)
-        group = FairLogisticRegression(l_fair=penalty, penalty_type='group', **shared_kwargs)
+        for pen_type in ['plain', 'individual, group']:
+            # Define model
+            if pen_type == 'plain':
+                model = FairLogisticRegression(n_epochs=n_epochs, ftol=1e-6, minibatch_size=32)
+            else:
+                model = FairLogisticRegression(l_fair=penalty, penalty_type=pen_type, **shared_kwargs)
 
-        # Fit them
-        plain.fit(x_train, y_train, s)
-        indiv.fit(x_train, y_train, s)
-        group.fit(x_train, y_train, s)
+            # Fit it
+            model.fit(x_train, y_train, s)
 
-        # Save the penalty weight
-        current_df_dict['l_fair'] = penalty
+            # Save string for identifying models
+            save_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, pen_type[:5])
+            current_df_dict['ID_String'].append(save_str)
 
-        # Save string for identifying models
-        plain_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'plain')
-        indiv_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'indiv')
-        group_str = 'fold: {} pen: {} type: {}'.format(fold, penalty, 'group')
-        current_df_dict['ID_String'].extend([plain_str, indiv_str, group_str])
+            # Save score info
+            score = model.score(x_test, y_test)
+            current_df_dict['Score'].append(score)
 
-        # Save score info
-        plain_score = plain.score(x_test, y_test)
-        indiv_score = indiv.score(x_test, y_test)
-        group_score = group.score(x_test, y_test)
-        current_df_dict['Score'].extend([plain_score, indiv_score, group_score])
+            # Save MSE info
+            pred = model.predict(x_test).data.cpu().numpy()
+            mse = mean_squared_error(pred, y_test.data.cpu().numpy())
+            current_df_dict['MSE'].append(mse)
 
-        # Save MSE info
-        plain_pred = plain.predict(x_test).data.cpu().numpy()
-        indiv_pred = indiv.predict(x_test).data.cpu().numpy()
-        group_pred = group.predict(x_test).data.cpu().numpy()
+            # Save Penalty info
+            pen_i = 0.
+            pen_g = 0.
 
-        plain_mse = mean_squared_error(plain_pred, y_test.data.cpu().numpy())
-        indiv_mse = mean_squared_error(indiv_pred, y_test.data.cpu().numpy())
-        group_mse = mean_squared_error(group_pred, y_test.data.cpu().numpy())
+            # Calculate the penalty measures in minibatches for the given train/test split, penalty, and model
+            for i, data in enumerate(loader):
+                inputs, labels = to_Variables(*data)
 
-        current_df_dict['MSE'].extend([plain_mse, indiv_mse, group_mse])
+                pen_i += model.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='individual')
+                pen_g += model.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='group')
 
-        # Save Penalty info
-        plain_pen_i = 0.
-        indiv_pen_i = 0.
-        group_pen_i = 0.
+            # Convert penalties back into numpy for saving them
+            pen_i = pen_i.data.cpu().numpy()[0]
+            pen_g = pen_g.data.cpu().numpy()[0]
 
-        plain_pen_g = 0.
-        indiv_pen_g = 0.
-        group_pen_g = 0.
+            current_df_dict['Individual Penalty'].append(pen_i)
+            current_df_dict['Group Penalty'].append(pen_g)
 
-        ds = TensorDataset(x_test.data.cpu(), y_test.data.cpu())
-        loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=1)
-        for i, data in enumerate(loader):
-            inputs, labels = to_Variables(*data)
+            model.model = model.model.cpu()
+            models[save_str] = model
 
-            plain_pen_i += plain.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='individual')
-            indiv_pen_i += indiv.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='individual')
-            group_pen_i += group.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='individual')
-
-            plain_pen_g += plain.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='group')
-            indiv_pen_g += indiv.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='group')
-            group_pen_g += group.fairness_penalty(inputs, labels, inputs, labels, s, penalty_type='group')
-
-        plain_pen_i = plain_pen_i.data.cpu().numpy()[0]
-        indiv_pen_i = indiv_pen_i.data.cpu().numpy()[0]
-        group_pen_i = group_pen_i.data.cpu().numpy()[0]
-
-        plain_pen_g = plain_pen_g.data.cpu().numpy()[0]
-        indiv_pen_g = indiv_pen_g.data.cpu().numpy()[0]
-        group_pen_g = group_pen_g.data.cpu().numpy()[0]
-
-        current_df_dict['Individual Penalty'].extend([plain_pen_i, indiv_pen_i, group_pen_i])
-        current_df_dict['Group Penalty'].extend([plain_pen_g, indiv_pen_g, group_pen_g])
-
+        # Concatenate the current dictionary to a dataframe and save its output
         df = pd.concat([df, pd.DataFrame.from_dict(current_df_dict)])
-
         df.to_csv('save_temporary_results.csv')
-
-        plain.model = plain.model.cpu()
-        indiv.model = indiv.model.cpu()
-        group.model = group.model.cpu()
-
-        models[plain_str] = plain
-        models[indiv_str] = indiv
-        models[group_str] = group
 
         with open('save_temporary_models.pkl', 'wb') as f:
             pickle.dump(models, f)
