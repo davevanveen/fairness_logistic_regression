@@ -3,3 +3,4 @@ data
 *__pycache__
 notebooks/.*
 fair_regression/logger_dir
+*.csv
