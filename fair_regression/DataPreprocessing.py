@@ -4,7 +4,6 @@ Created on Fri Apr 20 19:35:05 2018
 
 @author: ma56473
 """
-
 import numpy as np
 import pandas as pd
 
@@ -70,8 +69,7 @@ def split_protected_variable(raw_data, S_id):
     # Centering and normalizing continuous columns entries
     numerical_features = ["Age", "Education-Num", "Capital Gain", "Capital Loss", "Hours per week"]
     for featureName in numerical_features:
-        encoded_data[featureName] = (encoded_data[featureName] - np.mean(encoded_data[featureName],
-                                                                         axis=0)) / np.std(encoded_data[featureName], axis=0)  # noqa
+        encoded_data[featureName] = (encoded_data[featureName] - np.mean(encoded_data[featureName], axis=0)) / np.std(encoded_data[featureName], axis=0)  # noqa
 
     # Return triple (X, S, y). Return only (X, y) is 'S_id' is void
     if not S_id:
@@ -86,19 +84,21 @@ def split_protected_variable(raw_data, S_id):
     return X, S, y
 
 
-# Example usage
-# Read from .csv files
-train_file = '../data/adult_train.csv'
-test_file = '../data/adult_test.csv'
-feature_list = ["Age", "Workclass", "fnlwgt", "Education", "Education-Num", "Marital Status",
-                "Occupation", "Relationship", "Race", "Sex", "Capital Gain", "Capital Loss",
-                "Hours per week", "Country", "Target"]
+def get_adult_data(S_id, data_dir='../data'):
+    pd.options.mode.chained_assignment = None
+    # Read from .csv files
+    train_file = '{}/adult_train.csv'.format(data_dir)
+    test_file = '{}/adult_test.csv'.format(data_dir)
+    feature_list = ["Age", "Workclass", "fnlwgt", "Education", "Education-Num", "Marital Status",
+                    "Occupation", "Relationship", "Race", "Sex", "Capital Gain", "Capital Loss",
+                    "Hours per week", "Country", "Target"]
 
-# Read data
-train_data, test_data = import_data(train_file, test_file, feature_list)
+    # Read data
+    train_data, test_data = import_data(train_file, test_file, feature_list)
 
+    X_train, S_train, y_train = split_protected_variable(train_data, S_id[0])
+    X_test, S_test, y_test = split_protected_variable(test_data, S_id[0])
 
-# Extract X, y, S
-S_id = 'Sex_Female'  # False, 'Sex_Female' or 'Race_Non-White' are valid options
-X_train, S_train, y_train = split_protected_variable(train_data, S_id)
-X_test, S_test, y_test = split_protected_variable(test_data, S_id)
+    S = [X_train.columns.get_loc(s_id) for s_id in S_id]
+
+    return S, X_train, y_train, X_test, y_test
