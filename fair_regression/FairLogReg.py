@@ -292,16 +292,44 @@ class FairLogisticRegression():
         return self
 
     def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
-        dtype = type(xi.data)
+        """Compute the fairness penalty for a given sensitive column or columns or groups of columns
 
+        Args:
+            xi (torch.Tensor): Current sample or minibatch of data
+            yi (torch.LongTensor): Current sample's or minibatch's labels
+            x (toch.Tensor): The full data to compare against
+            y (torch.LongTensor): The full labels to compare against
+            s (list): A list containing single column indexes and lists of column indexes.
+                      If one of the members of the list is a list, then it is assumed that
+                      the indices in that list are linked together in an (n+1)-ary relationship
+            penalty_type (str, optional): Individual or Group penalty type
+
+        Returns:
+            float: Value of the penalty
+        """
+        dtype = type(xi.data)
+        # TODO: Make it so that we obtain the classes and treat each xi separately based on that
+
+        # Get info about groups of sensitive columns. This should work for both single (binary) columns
+        #   and also for groups of columns that represent (n+1)-ary decisions. E.g. 2 columns -> dummy
+        #   coded three class problem
         saved_idx_info = []
-        for col in s:
-            vals = np.unique(check_and_convert_tensor(x)[:, col])
+        for group in s:
+            vals = np.unique(check_and_convert_tensor(x)[:, group], axis=0)
+
             fairness_idxs = []
+            div = 1
             for val in vals:
-                idxs = (x[:, col] == float(val)).nonzero().squeeze()
+                if isinstance(val, np.ndarray):
+                    val = torch.from_numpy(val).type(dtype)
+                    idx_sum = (x[:, group] == val).sum(dim=1)
+                    idxs = (idx_sum == len(val)).nonzero().squeeze()
+                else:
+                    val = float(val)
+                    idxs = (x[:, group] == val).nonzero().squeeze()
+                div *= idxs.numel()
                 fairness_idxs.append(idxs)
-            current_info = list(zip(fairness_idxs, vals))
+            current_info = list(zip(fairness_idxs, [div] * len(vals)))
             saved_idx_info.append(current_info)
 
         # We're going to be indexing into the prediction in the loops below
@@ -311,11 +339,21 @@ class FairLogisticRegression():
         # Actually calculate the penalty
         penalty = 0
         for i, s_id in enumerate(s):
-            for idx, val in saved_idx_info[i]:
+            for idx, div in saved_idx_info[i]:
                 # Because of broadcasting rules, this should create a matrix of absolute differences
                 # of size (|S_i: class[idx]| x self.minibatch_size)
-                y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
-                div = idx.numel() * len((yi == val).nonzero())
+
+                # # This is the indicator function yi != yj
+                # y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+
+                # This is the indicator function yi == yj
+                y_diff = 1 - torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+
+                # # This below formulation is the function suggested for multi-class situation in the paper
+                # #   This still seems stupid. That's assuming there is an inherent and meaningful
+                # #   distance between class labels
+                # y_diff = (yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+                # y_diff = torch.exp(-(y_diff ** 2))
 
                 # For multinomial models, sum over each class
                 for col in range(y_soft_pred.size(1)):

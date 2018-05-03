@@ -50,7 +50,7 @@ shared_kwargs = {'ftol': 1e-6, 'n_epochs': n_epochs, 'minibatch_size': batch_siz
 
 df_template = {'Type': ['Plain', 'Individual', 'Group'],
                'MSE': [], 'Score': [], 'Group Penalty': [], 'Individual Penalty': [], 'ID_String': [], 'l_fair': None}
-penalties = np.logspace(-10, 2, 13)
+penalties = np.logspace(-10, 2, 7)
 cv = KFold(3)
 
 models = {}
