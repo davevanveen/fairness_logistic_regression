@@ -48,8 +48,7 @@ if torch.cuda.is_available():
 # K-fold Cross Validation for FairLogReg fairness search
 shared_kwargs = {'ftol': 1e-6, 'n_epochs': n_epochs, 'minibatch_size': batch_size, 'batch_fairness': True}
 
-df_template = {'Type': ['Plain', 'Individual', 'Group'],
-               'MSE': [], 'Score': [], 'Group Penalty': [], 'Individual Penalty': [], 'ID_String': [], 'l_fair': None}
+df_template = {'MSE': [], 'Score': [], 'Group Penalty': [], 'Individual Penalty': [], 'ID_String': [], 'l_fair': None}
 penalties = np.logspace(-10, 2, 7)
 cv = KFold(3)
 
@@ -83,6 +82,7 @@ for train, test in cv.split(x, y):
         penalty = float(penalty)  # PyTorch messes up with numpy types
 
         for pen_type in ['plain', 'individual, group']:
+            current_df_dict['Type'] = pen_type.title()
             # Define model
             if pen_type == 'plain':
                 model = FairLogisticRegression(n_epochs=n_epochs, ftol=1e-6, minibatch_size=32)
