@@ -370,5 +370,7 @@ class FairLogisticRegression():
                         # Group version
                         unsummed_term = y_diff * pred_diff
                         penalty = penalty + (unsummed_term.sum() / div) ** 2
+                    else:
+                        raise KeyError('penalty_type must be one of \{"individual", "group"\}')
 
         return penalty
