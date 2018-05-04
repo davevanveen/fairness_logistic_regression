@@ -291,6 +291,32 @@ class FairLogisticRegression():
 
         return self
 
+    @staticmethod
+    def _calculate_idx_info(x, y, s):
+        # Get info about groups of sensitive columns. This should work for both single (binary) columns
+        #   and also for groups of columns that represent (n+1)-ary decisions. E.g. 2 columns -> dummy
+        #   coded three class problem
+        saved_idx_info = []
+        for group in s:
+            vals = np.unique(check_and_convert_tensor(x)[:, group], axis=0)
+
+            fairness_idxs = []
+            div = 1
+            for val in vals:
+                if isinstance(val, np.ndarray):
+                    val = torch.from_numpy(val).type(type(x.data))
+                    idx_sum = (x[:, group] == val).sum(dim=1)
+                    idxs = (idx_sum == len(val)).nonzero().squeeze()
+                else:
+                    val = float(val)
+                    idxs = (x[:, group] == val).nonzero().squeeze()
+                div *= idxs.numel()
+                fairness_idxs.append(idxs)
+            current_info = list(zip(fairness_idxs, vals, [div] * len(vals)))
+            saved_idx_info.append(current_info)
+
+        return saved_idx_info
+
     def fairness_penalty(self, xi, yi, x, y, s, penalty_type='individual'):
         """Compute the fairness penalty for a given sensitive column or columns or groups of columns
 
@@ -309,28 +335,8 @@ class FairLogisticRegression():
         """
         dtype = type(xi.data)
         # TODO: Make it so that we obtain the classes and treat each xi separately based on that
-
-        # Get info about groups of sensitive columns. This should work for both single (binary) columns
-        #   and also for groups of columns that represent (n+1)-ary decisions. E.g. 2 columns -> dummy
-        #   coded three class problem
-        saved_idx_info = []
-        for group in s:
-            vals = np.unique(check_and_convert_tensor(x)[:, group], axis=0)
-
-            fairness_idxs = []
-            div = 1
-            for val in vals:
-                if isinstance(val, np.ndarray):
-                    val = torch.from_numpy(val).type(dtype)
-                    idx_sum = (x[:, group] == val).sum(dim=1)
-                    idxs = (idx_sum == len(val)).nonzero().squeeze()
-                else:
-                    val = float(val)
-                    idxs = (x[:, group] == val).nonzero().squeeze()
-                div *= idxs.numel()
-                fairness_idxs.append(idxs)
-            current_info = list(zip(fairness_idxs, [div] * len(vals)))
-            saved_idx_info.append(current_info)
+        mb_idx_info = self._calculate_idx_info(xi, yi, s)
+        full_idx_info = self._calculate_idx_info(x, y, s)
 
         # We're going to be indexing into the prediction in the loops below
         y_soft_pred = self.model.forward(x)
@@ -339,38 +345,46 @@ class FairLogisticRegression():
         # Actually calculate the penalty
         penalty = 0
         for i, s_id in enumerate(s):
-            for idx, div in saved_idx_info[i]:
-                # Because of broadcasting rules, this should create a matrix of absolute differences
-                # of size (|S_i: class[idx]| x self.minibatch_size)
+            for full_idx, full_val, div in full_idx_info[i]:
+                # Avoid reselecting every inner iteration to save a small amount of time
+                y_select = y[full_idx]
+                y_pred_select = y_soft_pred[full_idx]
+                for mb_idx, mb_val, _ in mb_idx_info[i]:
+                    # We only want to compare entries that are different between the two sets
+                    if mb_val == full_val:
+                        continue
 
-                # # This is the indicator function yi != yj
-                # y_diff = torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+                    # Because of broadcasting rules, this should create a matrix of absolute differences
+                    # of size (|S_i: class[full_idx]| x self.minibatch_size)
 
-                # This is the indicator function yi == yj
-                y_diff = 1 - torch.abs(yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
+                    # # This is the indicator function yi != yj
+                    # y_diff = torch.abs(yi[mb_idx].view(1, -1) - y_select.view(-1, 1)).type(dtype)
 
-                # # This below formulation is the function suggested for multi-class situation in the paper
-                # #   This still seems stupid. That's assuming there is an inherent and meaningful
-                # #   distance between class labels
-                # y_diff = (yi.view(1, -1) - y[idx].view(-1, 1)).type(dtype)
-                # y_diff = torch.exp(-(y_diff ** 2))
+                    # This is the indicator function yi == yj
+                    y_diff = 1 - torch.abs(yi[mb_idx].view(1, -1) - y_select.view(-1, 1)).type(dtype)
 
-                # For multinomial models, sum over each class
-                for col in range(y_soft_pred.size(1)):
-                    yi_soft_pred_col = yi_soft_pred[:, col].contiguous()
-                    y_soft_pred_col = y_soft_pred[idx][:, col].contiguous()
-                    pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
+                    # # This below formulation is the function suggested for multi-class situation in the paper
+                    # #   This still seems stupid. That's assuming there is an inherent and meaningful
+                    # #   distance between class labels
+                    # y_diff = (yi[mb_idx].view(1, -1) - y_select.view(-1, 1)).type(dtype)
+                    # y_diff = torch.exp(-(y_diff ** 2))
 
-                    if penalty_type == 'individual':
-                        # Individual version
-                        pred_diff = pred_diff ** 2
-                        unsummed_term = y_diff * pred_diff
-                        penalty = penalty + (unsummed_term).sum() / div
-                    elif penalty_type == 'group':
-                        # Group version
-                        unsummed_term = y_diff * pred_diff
-                        penalty = penalty + (unsummed_term.sum() / div) ** 2
-                    else:
-                        raise KeyError('penalty_type must be one of \{"individual", "group"\}')
+                    # For multinomial models, sum over each class
+                    for col in range(y_pred_select.size(1)):
+                        yi_soft_pred_col = yi_soft_pred[mb_idx][:, col].contiguous()
+                        y_soft_pred_col = y_pred_select[:, col].contiguous()
+                        pred_diff = (yi_soft_pred_col.view(1, -1) - y_soft_pred_col.view(-1, 1)).type(dtype)
+
+                        if penalty_type == 'individual':
+                            # Individual version
+                            pred_diff = pred_diff ** 2
+                            unsummed_term = y_diff * pred_diff
+                            penalty = penalty + (unsummed_term).sum() / div
+                        elif penalty_type == 'group':
+                            # Group version
+                            unsummed_term = y_diff * pred_diff
+                            penalty = penalty + (unsummed_term.sum() / div) ** 2
+                        else:
+                            raise KeyError('penalty_type must be one of \{"individual", "group"\}')
 
         return penalty

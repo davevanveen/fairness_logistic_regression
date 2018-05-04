@@ -99,6 +99,15 @@ def get_adult_data(S_id, data_dir='../data'):
     X_train, S_train, y_train = split_protected_variable(train_data, S_id[0])
     X_test, S_test, y_test = split_protected_variable(test_data, S_id[0])
 
-    S = [X_train.columns.get_loc(s_id) for s_id in S_id]
+    # Handle groups for n>2-ary dummy coded groups
+    S = []
+    for s_id in S_id:
+        if isinstance(s_id, list):
+            group = []
+            for sub_id in s_id:
+                group.append(X_train.columns.get_loc(sub_id))
+            S.append(group)
+        else:
+            S.append(X_train.columns.get_loc(s_id))
 
     return S, X_train, y_train, X_test, y_test

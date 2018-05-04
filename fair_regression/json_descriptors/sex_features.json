@@ -1,0 +1,13 @@
+{
+    "s_ids": ["Sex_Female"],
+    "n_epochs": 256,
+    "batch_size": 512,
+    "plain_batch_size": 32,
+    "ftol": 1e-6,
+    "batch_fairness": true,
+    "l_fair_logspace": [-6, 2, 7],
+    "cv": 1,
+    "csv_fn": "uni_sex_results.csv",
+    "models_fn": "uni_sex_models.pkl",
+    "pred_fn": "uni_sex_preds.csv"
+}
