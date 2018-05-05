@@ -76,10 +76,8 @@ def adult_sample_data():
     return x, y
 
 
-@pytest.fixture
-def female_adult_data():
-    s, x_train, y_train, x_test, y_test = get_adult_data(['Sex_Female'])
-
+def get_adult_test_data(s_ids):
+    s, x_train, y_train, x_test, y_test = get_adult_data(s_ids)
     x_train = Variable(torch.from_numpy(x_train.as_matrix()))
     y_train = Variable(torch.from_numpy(y_train.as_matrix()).long())
     x_test = Variable(torch.from_numpy(x_test.as_matrix()))
@@ -91,4 +89,21 @@ def female_adult_data():
         x_test = x_test.cuda()
         y_test = y_test.cuda()
 
-    return s, x_train, y_train, x_test, y_test
+    x, y, _, _1 = split_data(x_train, y_train, 0.5)
+
+    return s, x, y
+
+
+@pytest.fixture
+def female_adult_data():
+    return get_adult_test_data(['Sex_Female'])
+
+
+@pytest.fixture
+def joint_adult_data():
+    return get_adult_test_data([['Sex_Female', 'Race_Non-White']])
+
+
+@pytest.fixture
+def pairwise_adult_data():
+    return get_adult_test_data(['Sex_Female', 'Race_Non-White'])

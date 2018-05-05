@@ -121,8 +121,8 @@ class FairLogisticRegression():
         # loader = DataLoader(ds, batch_size=self.minibatch_size, shuffle=True, num_workers=self.n_jobs)
 
         # Create placeholder variables in case we aren't using fairness (don't mess with reporting of results)
-        fp = Variable(torch.FloatTensor(0))
-        fp_val = Variable(torch.FloatTensor(0))
+        fp = Variable(torch.FloatTensor([0]))
+        fp_val = Variable(torch.FloatTensor([0]))
 
         if self.n_samples is None or self.n_features is None:
             self.n_samples, self.n_features = x.size()
@@ -305,7 +305,7 @@ class FairLogisticRegression():
             for val in vals:
                 if isinstance(val, np.ndarray):
                     val = torch.from_numpy(val).type(type(x.data))
-                    idx_sum = (x[:, group] == val).sum(dim=1)
+                    idx_sum = (x[:, group].data == val).sum(dim=1)
                     idxs = (idx_sum == len(val)).nonzero().squeeze()
                 else:
                     val = float(val)
@@ -351,7 +351,8 @@ class FairLogisticRegression():
                 y_pred_select = y_soft_pred[full_idx]
                 for mb_idx, mb_val, _ in mb_idx_info[i]:
                     # We only want to compare entries that are different between the two sets
-                    if mb_val == full_val:
+                    comparison = (mb_val == full_val)
+                    if (isinstance(comparison, bool) and comparison) or comparison.all():
                         continue
 
                     # Because of broadcasting rules, this should create a matrix of absolute differences
