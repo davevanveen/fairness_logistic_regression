@@ -328,7 +328,7 @@ class FairLogisticRegression():
             s (list): A list containing single column indexes and lists of column indexes.
                       If one of the members of the list is a list, then it is assumed that
                       the indices in that list are linked together in an (n+1)-ary relationship
-            penalty_type (str, optional): Individual or Group penalty type
+            penalty_type (str, optional): Individual, Group, or Novel penalty type
 
         Returns:
             float: Value of the penalty
@@ -385,7 +385,13 @@ class FairLogisticRegression():
                             # Group version
                             unsummed_term = y_diff * pred_diff
                             penalty = penalty + (unsummed_term.sum() / div) ** 2
+                        elif penalty_type == 'novel':
+                            # Individual portion
+                            pred_diff = pred_diff ** 2
+                            term_1 = (y_diff * pred_diff).sum()
+                            term_2 = ((1 - y_diff) * torch.exp(-pred_diff)).sum()
+                            penalty = penalty + ((term_1 + term_2) / div)
                         else:
-                            raise KeyError('penalty_type must be one of \{"individual", "group"\}')
+                            raise KeyError('penalty_type must be one of \{"individual", "group", "novel"\}')
 
         return penalty
