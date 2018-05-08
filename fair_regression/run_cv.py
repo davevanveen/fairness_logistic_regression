@@ -108,7 +108,7 @@ class RunFairCV():
                 current_df_dict['l_fair'] = penalty  # Save the penalty weight
                 penalty = float(penalty)  # PyTorch messes up with numpy types
 
-                for pen_type in ['plain', 'individual', 'group']:
+                for pen_type in ['plain', 'individual', 'group', 'novel']:
                     current_df_dict['Type'].append(pen_type.title())
                     # Define model
                     if pen_type == 'plain':
