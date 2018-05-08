@@ -385,13 +385,19 @@ class FairLogisticRegression():
                             # Group version
                             unsummed_term = y_diff * pred_diff
                             penalty = penalty + (unsummed_term.sum() / div) ** 2
-                        elif penalty_type == 'novel':
+                        elif penalty_type == 'novel' or penalty_type == 'novel_i':
                             # Individual portion
                             pred_diff = pred_diff ** 2
                             term_1 = (y_diff * pred_diff).sum()
                             term_2 = ((1 - y_diff) * torch.exp(-pred_diff)).sum()
                             penalty = penalty + ((term_1 + term_2) / div)
+                        elif penalty_type == 'novel_g':
+                            term_1 = (y_diff * pred_diff).sum()
+                            # TODO: Check calculation of term_2
+                            indicated_pred_diff = (1 - y_diff) * pred_diff
+                            term_2 = torch.exp(-indicated_pred_diff.sum())
+                            penalty = penalty + ((term_1 + term_2) / div) ** 2
                         else:
-                            raise KeyError('penalty_type must be one of \{"individual", "group", "novel"\}')
+                            raise KeyError('penalty_type must be one of \{"individual", "group", "novel_i", "novel_g"\}')  # noqa
 
         return penalty
