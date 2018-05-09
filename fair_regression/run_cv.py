@@ -136,6 +136,7 @@ class RunFairCV():
                     # Save Penalty info
                     pen_i = 0.
                     pen_g = 0.
+                    pen_n = 0.
 
                     # Calculate the penalty measures in minibatches for the given train/test split, penalty, and model
                     for i, data in enumerate(loader):
@@ -143,13 +144,16 @@ class RunFairCV():
 
                         pen_i += model.fairness_penalty(inputs, labels, inputs, labels, self.s, penalty_type='individual')  # noqa
                         pen_g += model.fairness_penalty(inputs, labels, inputs, labels, self.s, penalty_type='group')
+                        pen_g += model.fairness_penalty(inputs, labels, inputs, labels, self.s, penalty_type='novel')
 
                     # Convert penalties back into numpy for saving them
                     pen_i = pen_i.data.cpu().numpy()[0]
                     pen_g = pen_g.data.cpu().numpy()[0]
+                    pen_n = pen_n.data.cpu().numpy()[0]
 
                     current_df_dict['Individual Penalty'].append(pen_i)
                     current_df_dict['Group Penalty'].append(pen_g)
+                    current_df_dict['Novel Penalty'].append(pen_n)
 
                     # Predict test data
                     pred = model.predict(self.xt).data.cpu().numpy()
