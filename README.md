@@ -2,4 +2,4 @@
 ### Sensitive Feature: Gender
 ### Application Domain: Salary
 
-Please see (link to report pdf) 
+Please see ```project_report.pdf``` for results.
